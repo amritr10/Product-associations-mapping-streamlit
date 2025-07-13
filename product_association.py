@@ -657,6 +657,22 @@ if page == "Configuration":
                 dependent_dfs[d["name"]] = dfd
                 dependent_sums[d["name"]] = sd
 
+            # Overlap Analysis
+            parent_models = {name: set(df['Description']) for name, df in parent_dfs.items() if not df.empty}
+            dependent_models = {name: set(df['Description']) for name, df in dependent_dfs.items() if not df.empty}
+
+            overlapping_models = {}
+            for pname, pmodels in parent_models.items():
+                for dname, dmodels in dependent_models.items():
+                    intersection = pmodels.intersection(dmodels)
+                    if intersection:
+                        if pname not in overlapping_models:
+                            overlapping_models[pname] = {}
+                        overlapping_models[pname][dname] = intersection
+            
+            overlapping_parent_groups = set(overlapping_models.keys())
+            parent_only_groups = set(parent_names) - overlapping_parent_groups
+
             # Process mappings
             mapping_to_parent = {}
             parent_to_mappings  = {}
@@ -731,7 +747,10 @@ if page == "Configuration":
                 "excel_bytes": excel_bytes,
                 "cfg_parent_list": parent_list,
                 "cfg_dependent_list": dependent_list,
-                "cfg_mapping_selections": mapping_selections
+                "cfg_mapping_selections": mapping_selections,
+                "overlapping_models": overlapping_models,
+                "overlapping_parent_groups": overlapping_parent_groups,
+                "parent_only_groups": parent_only_groups
             })
 
 
@@ -814,6 +833,9 @@ elif page == "Report":
     mappings_data     = st.session_state.mappings_data
     mapping_to_parent = st.session_state.mapping_to_parent
     excel_bytes       = st.session_state.excel_bytes
+    overlapping_models = st.session_state.overlapping_models
+    overlapping_parent_groups = st.session_state.overlapping_parent_groups
+    parent_only_groups = st.session_state.parent_only_groups
 
     # Download Excel
     st.download_button(
@@ -826,42 +848,6 @@ elif page == "Report":
     # Flatten for visuals
     flat = flatten_mappings(mappings_data, mapping_to_parent, dependent_sums)
 
-    # High-level KPIs
-    tot_p_ia = sum(parent_sums[p]['IA'] for p in parent_names)
-    tot_m_ia = flat['Dependent IA'].sum()
-    tot_u_ia = tot_p_ia - tot_m_ia
-    tot_p_fa = sum(parent_sums[p]['FA'] for p in parent_names)
-    tot_m_fa = flat['Dependent FA'].sum()
-    tot_u_fa = tot_p_fa - tot_m_fa
-
-    st.subheader("High-Level KPIs")
-    c1,c2,c3 = st.columns(3)
-    c1.metric("Total Parent IA", f"{tot_p_ia:.0f}")
-    c2.metric("Mapped IA",        f"{tot_m_ia:.0f}")
-    c3.metric("Unallocated IA",    f"{tot_u_ia:.0f}", delta_color="inverse")
-    d1,d2,d3 = st.columns(3)
-    d1.metric("Total Parent FA", f"{tot_p_fa:.0f}")
-    d2.metric("Mapped FA",        f"{tot_m_fa:.0f}")
-    d3.metric("Unallocated FA",    f"{tot_u_fa:.0f}", delta_color="inverse")
-
-    # Bar Charts
-    st.subheader("Allocation Charts")
-    chart_df = pd.DataFrame({
-        "Parent": parent_names,
-        "Parent IA": [parent_sums[p]['IA'] for p in parent_names],
-        "Mapped IA": [flat[flat['Parent Group']==p]['Dependent IA'].sum() for p in parent_names],
-        "Parent FA": [parent_sums[p]['FA'] for p in parent_names],
-        "Mapped FA": [flat[flat['Parent Group']==p]['Dependent FA'].sum() for p in parent_names],
-    })
-    ch1,ch2 = st.columns(2)
-    with ch1:
-        fig1 = px.bar(chart_df, x="Parent", y=["Parent IA","Mapped IA"],
-                      barmode="group", title="IA vs Mapped IA")
-        st.plotly_chart(fig1, use_container_width=True)
-    with ch2:
-        fig2 = px.bar(chart_df, x="Parent", y=["Parent FA","Mapped FA"],
-                      barmode="group", title="FA vs Mapped FA")
-        st.plotly_chart(fig2, use_container_width=True)
 
     # Network Graph with Selections
     st.subheader("Parent ↔ Dependent Network")
@@ -892,60 +878,99 @@ elif page == "Report":
             )
     # Build network graph with dynamic labels and edge types
     # Build network graph with titled clusters
+    # Create a flat set of all overlapping models for easy filtering
+    all_overlapping_flat = set()
+    if overlapping_models:
+        for pname, dmap in overlapping_models.items():
+            for dname, models in dmap.items():
+                all_overlapping_flat.update(models)
+
     dot_lines = [
         "digraph G {",
         "  rankdir=LR;",
-        ""
-        # 1) Parent cluster
+        "  node [fontname=helvetica];",
+        "  edge [fontname=helvetica];",
+        "  compound=true;",
+        "",
+        # 1) Parent cluster (only for non-overlapping parents)
         "  subgraph cluster_parents {",
         '    label="Parent Groups";',
         "    style=filled;",
         "    color=lightgrey;",
+        "    node [style=filled, shape=box, fillcolor=lightblue];",
     ]
-    # Parent nodes go inside cluster_parents
     for pn in parent_names:
-        labels = parent_selections.get(pn, [])
-        if labels:
-            # join selected products with <BR/>
-            items = "<BR/>".join(labels)
-            html_label = f"<B>{pn}</B><BR/>{items}"
-        else:
-            html_label = f"<B>{pn}</B>"
-        dot_lines.append(
-            # note: label=<…> enables HTML‐style labels
-            f'    "{pn}" [shape=box, style=filled, fillcolor=lightblue, label=<{html_label}>];'
-        )
-    dot_lines.append("  }")  # end parent cluster
+        if pn in overlapping_parent_groups:
+            continue # Skip overlapping parents, they are rendered as hybrid nodes
+        selected_for_pn = set(parent_selections.get(pn, []))
+        display_models = sorted(list(selected_for_pn))
+        items = "<BR/>".join(display_models) if display_models else ""
+        html_label = f"<B>{pn}</B>{'<BR/>' + items if items else ''}"
+        dot_lines.append(f'    "{pn}" [label=<{html_label}>];')
+    dot_lines.append("  }")
 
     dot_lines.extend([
         "",
         # 2) Dependent cluster
         "  subgraph cluster_dependents {",
         '    label="Dependent Groups";',
-        "    style=filled;",
-        "    color=white;",
+        "    style=filled; color=whitesmoke; node [style=filled];",
     ])
-    # Dependent nodes go inside cluster_dependents
-    for dn in dependent_names:
-        labels = dependent_selections.get(dn, [])
-        if labels:
-            items = "<BR/>".join(labels)
-            html_label = f"<B>{dn}</B><BR/>{items}"
-        else:
-            html_label = f"<B>{dn}</B>"
-        dot_lines.append(
-            f'    "{dn}" [shape=ellipse, style=filled, fillcolor=lightgreen, label=<{html_label}>];'
-        )
-    dot_lines.append("  }")  # end dependent cluster
 
-    # 3) Edges (outside of clusters)
+    # Create a container for each dependent group
+    for dn in dependent_names:
+        dot_lines.extend([
+            f'  subgraph "cluster_{dn}" {{',
+            f'    label="{dn}";',
+            f'    style="filled"; color="lightgreen";',
+        ])
+
+        # Node for non-overlapping models within the dependent group
+        selected_for_dn = set(dependent_selections.get(dn, []))
+        display_models_dn = sorted(list(selected_for_dn - all_overlapping_flat))
+        items_dn = "<BR/>".join(display_models_dn) if display_models_dn else ""
+        if not items_dn and any(dn in d for p, d in overlapping_models.items()):
+             html_label_dn = f'<B>{dn}</B><BR/>(unique models)'
+        else:
+            html_label_dn = f"<B>{dn}</B>{'<BR/>' + items_dn if items_dn else ''}"
+        dot_lines.append(f'    "{dn}" [shape=ellipse, fillcolor=lightgreen, label=<{html_label_dn}>];')
+
+        # Create hybrid boxes for overlaps INSIDE this dependent group
+        for opg in overlapping_parent_groups:
+            if opg in overlapping_models and dn in overlapping_models[opg]:
+                intersecting_models = overlapping_models[opg][dn]
+                selected_parent_products = set(parent_selections.get(opg, []))
+                display_models_hybrid = sorted(list(intersecting_models.intersection(selected_parent_products)))
+                
+                if display_models_hybrid:
+                    hybrid_name = f"hybrid_{opg}_{dn}"
+                    items_hybrid = "<BR/>".join(display_models_hybrid)
+                    html_label_hybrid = f"<B>{opg} Models</B><BR/>{items_hybrid}"
+                    dot_lines.append(
+                        f'    "{hybrid_name}" [shape=box, style=filled, fillcolor="tomato", label=<{html_label_hybrid}>];'
+                    )
+        dot_lines.append("  }")
+
+    dot_lines.append("  }")
+
+    # 3) Edges
     for _, r in flat.iterrows():
+        pg = r["Parent Group"]
+        dg = r["Dependent Group"]
         style = "solid" if r["Type"] == "Objective" else "dashed"
         color = "blue" if r["Type"] == "Objective" else "gray"
-        dot_lines.append(
-            f'  "{r["Parent Group"]}" -> "{r["Dependent Group"]}" '
-            f'[label="{r["Type"]} ({r["Multiple"]})", style="{style}", color="{color}"];'
-        )
+        label = f'{r["Type"]} ({r["Multiple"]})'
+        
+        if pg not in overlapping_parent_groups:
+            # Edge from a normal parent
+            dot_lines.append(f'  "{pg}" -> "{dg}" [label="{label}", style="{style}", color="{color}"];')
+        else:
+            # Edge from a hybrid parent
+            # The connection originates from the hybrid box inside the dependent it overlaps with
+            if pg in overlapping_models:
+                for d_overlap in overlapping_models[pg].keys():
+                    hybrid_name = f"hybrid_{pg}_{d_overlap}"
+                    dot_lines.append(f'  "{hybrid_name}" -> "{dg}" [label="{label}", style="{style}", color="{color}"];')
 
     dot_lines.append("}")
     dot = "\n".join(dot_lines)
