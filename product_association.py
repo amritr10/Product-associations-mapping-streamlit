@@ -4,25 +4,10 @@ import re
 import io
 import json
 from datetime import datetime
-# Remove this problematic import:
-# from xlsxwriter.utility import xl_col_to_name
+from xlsxwriter.utility import xl_col_to_name
+import plotly.express as px
 
-# Try to import plotly, handle gracefully if not available
-try:
-    import plotly.express as px
-    HAS_PLOTLY = True
-except ImportError:
-    HAS_PLOTLY = False
-    st.error("Plotly is not installed. Charts will not be available.")
 
-# Add this helper function instead:
-def xl_col_to_name(col_num):
-    """Convert a zero-indexed column number to Excel column name (A, B, C, ..., AA, AB, etc.)"""
-    result = ""
-    while col_num >= 0:
-        result = chr(col_num % 26 + ord('A')) + result
-        col_num = col_num // 26 - 1
-    return result
 
 # ---------------------------
 # Helper Functions
