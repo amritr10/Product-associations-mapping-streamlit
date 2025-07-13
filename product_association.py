@@ -6,7 +6,14 @@ import json
 from datetime import datetime
 # Remove this problematic import:
 # from xlsxwriter.utility import xl_col_to_name
-import plotly.express as px
+
+# Try to import plotly, handle gracefully if not available
+try:
+    import plotly.express as px
+    HAS_PLOTLY = True
+except ImportError:
+    HAS_PLOTLY = False
+    st.error("Plotly is not installed. Charts will not be available.")
 
 # Add this helper function instead:
 def xl_col_to_name(col_num):
