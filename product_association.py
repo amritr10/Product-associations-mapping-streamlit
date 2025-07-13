@@ -765,78 +765,59 @@ elif page == "Report":
         st.warning("Generate the report first on the Configuration page.")
         st.stop()
 
-    # ─────────────────────────────────────────────
-    # A) Rebuild the “current config” from the form widgets
-    # ─────────────────────────────────────────────
-    parent_count = st.session_state["parent_count"]
-    dep_count    = st.session_state["dependent_count"]
 
-    # parent_groups
-    parent_groups = []
-    for i in range(parent_count):
-        parent_groups.append({
-            "name": st.session_state[f"parent_name_{i}"],
-            "search_terms": [
-                s.strip()
-                for s in st.session_state[f"parent_search_{i}"].split(",")
-                if s.strip()
-            ],
-            "exclusion_terms": [
-                s.strip()
-                for s in st.session_state[f"parent_excl_{i}"].split(",")
-                if s.strip()
-            ],
-        })
+    # ─────────────────────────────────────────────────
+    # REHYDRATE last_config from the saved cfg_* lists
+    # ─────────────────────────────────────────────────
+    if (
+        "cfg_parent_list" in st.session_state
+        and "cfg_dependent_list" in st.session_state
+        and "cfg_mapping_selections" in st.session_state
+    ):
+        p_list  = st.session_state["cfg_parent_list"]
+        d_list  = st.session_state["cfg_dependent_list"]
+        map_sel = st.session_state["cfg_mapping_selections"]
 
-    # dependent_groups
-    dependent_groups = []
-    for j in range(dep_count):
-        dependent_groups.append({
-            "name": st.session_state[f"dep_name_{j}"],
-            "search_terms": [
-                s.strip()
-                for s in st.session_state[f"dep_search_{j}"].split(",")
-                if s.strip()
+        # build a fresh config dict exactly matching your apply_config format
+        new_cfg = {
+            "num_parent_groups":    len(p_list),
+            "num_dependent_groups": len(d_list),
+            "parent_groups": [
+                {
+                    "name": pg["name"],
+                    "search_terms": pg["search"],
+                    "exclusion_terms": pg["excl"],
+                }
+                for pg in p_list
             ],
-            "exclusion_terms": [
-                s.strip()
-                for s in st.session_state[f"dep_excl_{j}"].split(",")
-                if s.strip()
+            "dependent_groups": [
+                {
+                    "name": dg["name"],
+                    "search_terms": dg["search"],
+                    "exclusion_terms": dg["excl"],
+                }
+                for dg in d_list
             ],
-        })
-
-    # mapping_selections
-    mapping_selections = {}
-    for i in range(parent_count):
-        pg = st.session_state[f"parent_name_{i}"]
-        mg = st.session_state[f"mapping_name_{i}"]
-        sel_deps = []
-        for j in range(dep_count):
-            if st.session_state.get(f"map_{i}_{j}", False):
-                sel_deps.append({
-                    "name": st.session_state[f"dep_name_{j}"],
-                    "Objective Mapping": st.session_state.get(f"obj_{i}_{j}", False),
-                    "multiple": st.session_state.get(f"mult_{i}_{j}", 1.0),
-                })
-        mapping_selections[pg] = {
-            "mapping_group_name": mg,
-            "selected_dependents": sel_deps
+            "mapping_selections": {
+                # key = actual parent_name
+                p_list[blk["parent_idx"]]["name"]: {
+                    "mapping_group_name": blk["mapping_name"],
+                    "selected_dependents": [
+                        {
+                            "name": d_list[sel["dep_idx"]]["name"],
+                            "Objective Mapping": sel["objective"],
+                            "multiple": sel["multiple"],
+                        }
+                        for sel in blk["selections"] if sel["selected"]
+                    ],
+                }
+                for blk in map_sel
+            },
         }
 
-    cur_config = {
-        "num_parent_groups":    parent_count,
-        "num_dependent_groups": dep_count,
-        "parent_groups":        parent_groups,
-        "dependent_groups":     dependent_groups,
-        "mapping_selections":   mapping_selections
-    }
-
-    # ─────────────────────────────────────────────
-    # B) Save it now that we’ve “navigated” to Report
-    # ─────────────────────────────────────────────
-    st.session_state["last_config"]     = cur_config
-    # mark that the next time we hit Configuration we should re‐apply it
-    st.session_state["config_prefilled"] = False    
+        # now replace last_config so that Configuration→prefill works
+        st.session_state["last_config"]     = new_cfg
+        st.session_state["config_prefilled"] = False
 
     # Retrieve
     parent_names      = st.session_state.parent_names
