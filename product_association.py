@@ -718,9 +718,56 @@ elif page == "Report":
                       barmode="group", title="FA vs Mapped FA")
         st.plotly_chart(fig2, use_container_width=True)
 
-    # Network Graph
+    # Network Graph with Selections
     st.subheader("Parent ↔ Dependent Network")
-    st.graphviz_chart(build_network_dot(flat), use_container_width=True)
+    # Product selection per group
+    parent_selections = {}
+    for pn in parent_names:
+        parent_selections[pn] = st.multiselect(
+            f"Select products for {pn}",
+            options=parent_dfs[pn]['Description'].tolist(),
+            default=parent_dfs[pn]['Description'].tolist(),
+            key=f"select_{pn}"
+        )
+    dependent_selections = {}
+    for dn in dependent_names:
+        dependent_selections[dn] = st.multiselect(
+            f"Select products for {dn}",
+            options=dependent_dfs[dn]['Description'].tolist(),
+            default=dependent_dfs[dn]['Description'].tolist(),
+            key=f"select_{dn}"
+        )
+    # Build network graph with dynamic labels and edge types
+    dot_lines = ["digraph G {", "rankdir=LR;"]
+    # Nodes
+    for pn in parent_names:
+        labels = parent_selections.get(pn, [])
+        label = "\\n".join(labels) if labels else pn
+        dot_lines.append(f'"{pn}" [shape=box, style=filled, fillcolor=lightblue, label="{label}"];')
+    for dn in dependent_names:
+        labels = dependent_selections.get(dn, [])
+        label = "\\n".join(labels) if labels else dn
+        dot_lines.append(f'"{dn}" [shape=ellipse, style=filled, fillcolor=lightgreen, label="{label}"];')
+    # Edges with mapping type and multiple
+    for _, r in flat.iterrows():
+        style = "solid" if r["Type"]=="Objective" else "dashed"
+        color = "blue" if r["Type"]=="Objective" else "gray"
+        dot_lines.append(
+            f'"{r["Parent Group"]}" -> "{r["Dependent Group"]}" '
+            f'[label="{r["Type"]} ({r["Multiple"]})", style="{style}", color="{color}"];'
+        )
+    dot_lines.append("}")
+    dot = "\n".join(dot_lines)
+    st.graphviz_chart(dot, use_container_width=True)
+    # # Sum prices of selected products
+    # total_price = 0.0
+    # for pn, sel in parent_selections.items():
+    #     dfp = parent_dfs[pn]
+    #     total_price += dfp[dfp["Description"].isin(sel)]["Price"].sum()
+    # for dn, sel in dependent_selections.items():
+    #     dfd = dependent_dfs[dn]
+    #     total_price += dfd[dfd["Description"].isin(sel)]["Price"].sum()
+    # st.write(f"**Total Price of Selected Products:** {total_price:.2f}")
 
     # Raw Data Explorer
     st.subheader("Raw Data Explorer")
@@ -794,5 +841,3 @@ elif page == "Report":
             file_name="config.json",
             mime="application/json"
         )
-
-
