@@ -404,12 +404,39 @@ config_upload = st.sidebar.file_uploader("Upload config JSON (optional)", type=[
 if config_upload is not None:
     try:
         cfg = json.load(config_upload)
-        st.sidebar.success("Config JSON loaded.")
+        # st.sidebar.success("Config JSON loaded.")
         if st.sidebar.button("Apply Config to Form"):
             apply_config(cfg)
     except Exception as e:
         st.sidebar.error(f"Invalid JSON: {e}")
+# ───────────────────────────────────────────────────────────────
+# Sidebar: Clear Form button (only when the form is “dirty”)
+# ───────────────────────────────────────────────────────────────
+def _form_is_filled():
+    for k in st.session_state.keys():
+        if k.startswith((
+            "parent_count","dependent_count",
+            "parent_name_","parent_search_","parent_excl_",
+            "dep_name_","dep_search_","dep_excl_",
+            "mapping_name_","map_","obj_","mult_"
+        )):
+            # if any of those keys exist & are not default
+            return True
+    return False
 
+if _form_is_filled():
+    if st.sidebar.button("🔄 Clear Form"):
+        # delete all form‐related keys
+        for k in list(st.session_state.keys()):
+            if k.startswith((
+                "parent_count","dependent_count",
+                "parent_name_","parent_search_","parent_excl_",
+                "dep_name_","dep_search_","dep_excl_",
+                "mapping_name_","map_","obj_","mult_"
+            )) or k in ("last_config","config_prefilled","report_ready"):
+                del st.session_state[k]
+        # force a rerun so the form empties out
+        st.rerun()
 # Page selector
 page = st.sidebar.radio("Go to", ["Configuration","Report"])
 
@@ -428,6 +455,16 @@ if page == "Configuration":
     if df.empty:
         st.error("No data loaded from your file.")
         st.stop()
+
+    # ─────────────────────────────────────────────
+    # 0) Prefill the form from last‐generated config
+    # ─────────────────────────────────────────────
+    if "last_config" in st.session_state and not st.session_state.get("config_prefilled", False):
+        # mark that we’ve applied it (so we don’t loop)
+        st.session_state["config_prefilled"] = True
+        # this will populate ALL your parent_/dep_/map_ widgets from last_config
+        apply_config(st.session_state["last_config"])
+        # apply_config() calls st.rerun() for us
 
     with st.expander("Data Preview (first 50 rows)", expanded=False):
         st.dataframe(df.head(50))
@@ -556,101 +593,153 @@ if page == "Configuration":
                 "selections": sel_list
             })
 
-    # Generate Report
-    if st.button("Generate Report"):
-        # Process parent groups
-        parent_dfs, parent_sums, parent_names = {}, {}, []
-        for p in parent_list:
-            parent_names.append(p["name"])
-            dfp, sp = filter_and_sum(df, p["search"], p["excl"])
-            parent_dfs[p["name"]] = dfp
-            parent_sums[p["name"]] = sp
+    # ─────────────────────────────────────────────
+    # Build a dict of the current form configuration
+    # ─────────────────────────────────────────────
+    cur_config = {
+        "num_parent_groups":    parent_count,
+        "num_dependent_groups": dep_count,
+        "parent_groups": [
+            {"name": p["name"], 
+             "search_terms": p["search"], 
+             "exclusion_terms": p["excl"]}
+            for p in parent_list
+        ],
+        "dependent_groups": [
+            {"name": d["name"], 
+             "search_terms": d["search"], 
+             "exclusion_terms": d["excl"]}
+            for d in dependent_list
+        ],
+        "mapping_selections": {
+            parent_list[blk["parent_idx"]]["name"]: {
+                "mapping_group_name": blk["mapping_name"],
+                "selected_dependents": [
+                    {
+                        "name": dependent_list[sel["dep_idx"]]["name"],
+                        "Objective Mapping": sel["objective"],
+                        "multiple": sel["multiple"]
+                    }
+                    for sel in blk["selections"] if sel["selected"]
+                ]
+            }
+            for blk in mapping_selections
+        }
+    }
 
-        # Process dependent groups
-        dependent_dfs, dependent_sums, dependent_names = {}, {}, []
-        for d in dependent_list:
-            dependent_names.append(d["name"])
-            dfd, sd = filter_and_sum(df, d["search"], d["excl"])
-            dependent_dfs[d["name"]] = dfd
-            dependent_sums[d["name"]] = sd
+    # # If we’ve generated a report before, but the form now differs, warn
+    # if "last_config" in st.session_state and cur_config != st.session_state["last_config"]:
+    #     st.sidebar.warning("⚠ You have unsaved changes. Click **Generate Report** to refresh the report with your edits.")
 
-        # Process mappings
-        mapping_to_parent = {}
-        parent_to_mappings  = {}
-        dependent_to_mappings= {}
-        mappings_data       = {}
-        for block in mapping_selections:
-            i  = block["parent_idx"]
-            pg = parent_list[i]["name"]
-            mg = block["mapping_name"]
-            entries = []
-            for sel in block["selections"]:
-                if sel["selected"]:
-                    dg = dependent_list[sel["dep_idx"]]["name"]
-                    mult = sel["multiple"]
-                    try:
-                        bal_ia = calculate_balances(parent_sums[pg], dependent_sums[dg], 'IA', mult)
-                        bal_fa = calculate_balances(parent_sums[pg], dependent_sums[dg], 'FA', mult)
-                    except:
-                        bal_ia = bal_fa = 0.0
-                    entries.append({
-                        "Dependent Group": dg,
-                        "Type": "Objective" if sel["objective"] else "Subjective",
-                        "Multiple": mult,
-                        "Balance IA": bal_ia,
-                        "Balance FA": bal_fa
-                    })
-                    dependent_to_mappings.setdefault(dg, []).append(pg)
+    # ─────────────────────────────────────────────────────────
+    # Sidebar “Generate Report” button + status messaging
+    # ─────────────────────────────────────────────────────────
+    gen_clicked = st.sidebar.button("Generate Report")
 
-            mappings_data[mg] = pd.DataFrame(entries)
-            mapping_to_parent[mg] = pg
-            parent_to_mappings.setdefault(pg, []).append(mg)
+    if gen_clicked:
+        # # Generate Report
+        # if st.button("Generate Report"):
+            # Process parent groups
+            parent_dfs, parent_sums, parent_names = {}, {}, []
+            for p in parent_list:
+                parent_names.append(p["name"])
+                dfp, sp = filter_and_sum(df, p["search"], p["excl"])
+                parent_dfs[p["name"]] = dfp
+                parent_sums[p["name"]] = sp
 
-        # Safe sheet names
-        existing = {"Dependent Perspective","All Mappings"}
-        parent_sheet_names = {}
-        for pn in parent_names:
-            sn = get_safe_sheet_name(pn, existing)
-            parent_sheet_names[pn] = sn
-            existing.add(sn)
-        dependent_sheet_names = {}
-        for dn in dependent_names:
-            sn = get_safe_sheet_name(dn, existing)
-            dependent_sheet_names[dn] = sn
-            existing.add(sn)
+            # Process dependent groups
+            dependent_dfs, dependent_sums, dependent_names = {}, {}, []
+            for d in dependent_list:
+                dependent_names.append(d["name"])
+                dfd, sd = filter_and_sum(df, d["search"], d["excl"])
+                dependent_dfs[d["name"]] = dfd
+                dependent_sums[d["name"]] = sd
 
-        # Build Excel
-        excel_bytes = save_to_excel_bytes(
-            mappings_data, mapping_to_parent, dependent_to_mappings,
-            parent_dfs, dependent_dfs,
-            parent_names, dependent_names,
-            parent_to_mappings,
-            parent_sheet_names, dependent_sheet_names,
-            parent_sums, dependent_sums
-        )
+            # Process mappings
+            mapping_to_parent = {}
+            parent_to_mappings  = {}
+            dependent_to_mappings= {}
+            mappings_data       = {}
+            for block in mapping_selections:
+                i  = block["parent_idx"]
+                pg = parent_list[i]["name"]
+                mg = block["mapping_name"]
+                entries = []
+                for sel in block["selections"]:
+                    if sel["selected"]:
+                        dg = dependent_list[sel["dep_idx"]]["name"]
+                        mult = sel["multiple"]
+                        try:
+                            bal_ia = calculate_balances(parent_sums[pg], dependent_sums[dg], 'IA', mult)
+                            bal_fa = calculate_balances(parent_sums[pg], dependent_sums[dg], 'FA', mult)
+                        except:
+                            bal_ia = bal_fa = 0.0
+                        entries.append({
+                            "Dependent Group": dg,
+                            "Type": "Objective" if sel["objective"] else "Subjective",
+                            "Multiple": mult,
+                            "Balance IA": bal_ia,
+                            "Balance FA": bal_fa
+                        })
+                        dependent_to_mappings.setdefault(dg, []).append(pg)
 
-        # Persist to session_state
-        st.session_state.update({
-            "report_ready": True,
-            "df": df,
-            "parent_names": parent_names,
-            "dependent_names": dependent_names,
-            "parent_dfs": parent_dfs,
-            "dependent_dfs": dependent_dfs,
-            "parent_sums": parent_sums,
-            "dependent_sums": dependent_sums,
-            "mappings_data": mappings_data,
-            "mapping_to_parent": mapping_to_parent,
-            "parent_to_mappings": parent_to_mappings,
-            "dependent_to_mappings": dependent_to_mappings,
-            "parent_sheet_names": parent_sheet_names,
-            "dependent_sheet_names": dependent_sheet_names,
-            "excel_bytes": excel_bytes,
-            "cfg_parent_list": parent_list,
-            "cfg_dependent_list": dependent_list,
-            "cfg_mapping_selections": mapping_selections
-        })
-        st.success("✅ Report generated! Switch to the Report page to explore.")
+                mappings_data[mg] = pd.DataFrame(entries)
+                mapping_to_parent[mg] = pg
+                parent_to_mappings.setdefault(pg, []).append(mg)
+
+            # Safe sheet names
+            existing = {"Dependent Perspective","All Mappings"}
+            parent_sheet_names = {}
+            for pn in parent_names:
+                sn = get_safe_sheet_name(pn, existing)
+                parent_sheet_names[pn] = sn
+                existing.add(sn)
+            dependent_sheet_names = {}
+            for dn in dependent_names:
+                sn = get_safe_sheet_name(dn, existing)
+                dependent_sheet_names[dn] = sn
+                existing.add(sn)
+
+            # Build Excel
+            excel_bytes = save_to_excel_bytes(
+                mappings_data, mapping_to_parent, dependent_to_mappings,
+                parent_dfs, dependent_dfs,
+                parent_names, dependent_names,
+                parent_to_mappings,
+                parent_sheet_names, dependent_sheet_names,
+                parent_sums, dependent_sums
+            )
+
+            # Persist to session_state
+            st.session_state.update({
+                "report_ready": True,
+                "df": df,
+                "parent_names": parent_names,
+                "dependent_names": dependent_names,
+                "parent_dfs": parent_dfs,
+                "dependent_dfs": dependent_dfs,
+                "parent_sums": parent_sums,
+                "dependent_sums": dependent_sums,
+                "mappings_data": mappings_data,
+                "mapping_to_parent": mapping_to_parent,
+                "parent_to_mappings": parent_to_mappings,
+                "dependent_to_mappings": dependent_to_mappings,
+                "parent_sheet_names": parent_sheet_names,
+                "dependent_sheet_names": dependent_sheet_names,
+                "excel_bytes": excel_bytes,
+                "cfg_parent_list": parent_list,
+                "cfg_dependent_list": dependent_list,
+                "cfg_mapping_selections": mapping_selections
+            })
+
+
+    # Always show *one* message in the sidebar:
+    if gen_clicked:
+        st.sidebar.success("✅ Report generated! Switch to the Report page to explore.")
+    elif "last_config" in st.session_state and cur_config != st.session_state["last_config"]:
+        st.sidebar.warning("⚠ You have unsaved changes. Click **Generate Report** to refresh the report with your edits.")
+
+
 
 # === Report Page ===
 elif page == "Report":
@@ -658,6 +747,79 @@ elif page == "Report":
     if not st.session_state.report_ready:
         st.warning("Generate the report first on the Configuration page.")
         st.stop()
+
+    # ─────────────────────────────────────────────
+    # A) Rebuild the “current config” from the form widgets
+    # ─────────────────────────────────────────────
+    parent_count = st.session_state["parent_count"]
+    dep_count    = st.session_state["dependent_count"]
+
+    # parent_groups
+    parent_groups = []
+    for i in range(parent_count):
+        parent_groups.append({
+            "name": st.session_state[f"parent_name_{i}"],
+            "search_terms": [
+                s.strip()
+                for s in st.session_state[f"parent_search_{i}"].split(",")
+                if s.strip()
+            ],
+            "exclusion_terms": [
+                s.strip()
+                for s in st.session_state[f"parent_excl_{i}"].split(",")
+                if s.strip()
+            ],
+        })
+
+    # dependent_groups
+    dependent_groups = []
+    for j in range(dep_count):
+        dependent_groups.append({
+            "name": st.session_state[f"dep_name_{j}"],
+            "search_terms": [
+                s.strip()
+                for s in st.session_state[f"dep_search_{j}"].split(",")
+                if s.strip()
+            ],
+            "exclusion_terms": [
+                s.strip()
+                for s in st.session_state[f"dep_excl_{j}"].split(",")
+                if s.strip()
+            ],
+        })
+
+    # mapping_selections
+    mapping_selections = {}
+    for i in range(parent_count):
+        pg = st.session_state[f"parent_name_{i}"]
+        mg = st.session_state[f"mapping_name_{i}"]
+        sel_deps = []
+        for j in range(dep_count):
+            if st.session_state.get(f"map_{i}_{j}", False):
+                sel_deps.append({
+                    "name": st.session_state[f"dep_name_{j}"],
+                    "Objective Mapping": st.session_state.get(f"obj_{i}_{j}", False),
+                    "multiple": st.session_state.get(f"mult_{i}_{j}", 1.0),
+                })
+        mapping_selections[pg] = {
+            "mapping_group_name": mg,
+            "selected_dependents": sel_deps
+        }
+
+    cur_config = {
+        "num_parent_groups":    parent_count,
+        "num_dependent_groups": dep_count,
+        "parent_groups":        parent_groups,
+        "dependent_groups":     dependent_groups,
+        "mapping_selections":   mapping_selections
+    }
+
+    # ─────────────────────────────────────────────
+    # B) Save it now that we’ve “navigated” to Report
+    # ─────────────────────────────────────────────
+    st.session_state["last_config"]     = cur_config
+    # mark that the next time we hit Configuration we should re‐apply it
+    st.session_state["config_prefilled"] = False    
 
     # Retrieve
     parent_names      = st.session_state.parent_names
@@ -723,41 +885,88 @@ elif page == "Report":
     # Product selection per group
     parent_selections = {}
     for pn in parent_names:
-        parent_selections[pn] = st.multiselect(
-            f"Select products for {pn}",
-            options=parent_dfs[pn]['Description'].tolist(),
-            default=parent_dfs[pn]['Description'].tolist(),
-            key=f"select_{pn}"
-        )
+        with st.expander(f"Products for {pn}", expanded=False):
+            all_opts = parent_dfs[pn]['Description'].tolist()
+            select_all = st.checkbox("Select All", value=True, key=f"select_all_{pn}")
+            default_opts = all_opts if select_all else []
+            parent_selections[pn] = st.multiselect(
+                f"Select products for {pn}",
+                options=all_opts,
+                default=default_opts,
+                key=f"select_{pn}"
+            )
     dependent_selections = {}
     for dn in dependent_names:
-        dependent_selections[dn] = st.multiselect(
-            f"Select products for {dn}",
-            options=dependent_dfs[dn]['Description'].tolist(),
-            default=dependent_dfs[dn]['Description'].tolist(),
-            key=f"select_{dn}"
-        )
+        with st.expander(f"Products for {dn}", expanded=False):
+            all_opts = dependent_dfs[dn]['Description'].tolist()
+            select_all = st.checkbox("Select All", value=True, key=f"select_all_{dn}")
+            default_opts = all_opts if select_all else []
+            dependent_selections[dn] = st.multiselect(
+                f"Select products for {dn}",
+                options=all_opts,
+                default=default_opts,
+                key=f"select_{dn}"
+            )
     # Build network graph with dynamic labels and edge types
-    dot_lines = ["digraph G {", "rankdir=LR;"]
-    # Nodes
+    # Build network graph with titled clusters
+    dot_lines = [
+        "digraph G {",
+        "  rankdir=LR;",
+        ""
+        # 1) Parent cluster
+        "  subgraph cluster_parents {",
+        '    label="Parent Groups";',
+        "    style=filled;",
+        "    color=lightgrey;",
+    ]
+    # Parent nodes go inside cluster_parents
     for pn in parent_names:
         labels = parent_selections.get(pn, [])
-        label = "\\n".join(labels) if labels else pn
-        dot_lines.append(f'"{pn}" [shape=box, style=filled, fillcolor=lightblue, label="{label}"];')
+        if labels:
+            # join selected products with <BR/>
+            items = "<BR/>".join(labels)
+            html_label = f"<B>{pn}</B><BR/>{items}"
+        else:
+            html_label = f"<B>{pn}</B>"
+        dot_lines.append(
+            # note: label=<…> enables HTML‐style labels
+            f'    "{pn}" [shape=box, style=filled, fillcolor=lightblue, label=<{html_label}>];'
+        )
+    dot_lines.append("  }")  # end parent cluster
+
+    dot_lines.extend([
+        "",
+        # 2) Dependent cluster
+        "  subgraph cluster_dependents {",
+        '    label="Dependent Groups";',
+        "    style=filled;",
+        "    color=white;",
+    ])
+    # Dependent nodes go inside cluster_dependents
     for dn in dependent_names:
         labels = dependent_selections.get(dn, [])
-        label = "\\n".join(labels) if labels else dn
-        dot_lines.append(f'"{dn}" [shape=ellipse, style=filled, fillcolor=lightgreen, label="{label}"];')
-    # Edges with mapping type and multiple
-    for _, r in flat.iterrows():
-        style = "solid" if r["Type"]=="Objective" else "dashed"
-        color = "blue" if r["Type"]=="Objective" else "gray"
+        if labels:
+            items = "<BR/>".join(labels)
+            html_label = f"<B>{dn}</B><BR/>{items}"
+        else:
+            html_label = f"<B>{dn}</B>"
         dot_lines.append(
-            f'"{r["Parent Group"]}" -> "{r["Dependent Group"]}" '
+            f'    "{dn}" [shape=ellipse, style=filled, fillcolor=lightgreen, label=<{html_label}>];'
+        )
+    dot_lines.append("  }")  # end dependent cluster
+
+    # 3) Edges (outside of clusters)
+    for _, r in flat.iterrows():
+        style = "solid" if r["Type"] == "Objective" else "dashed"
+        color = "blue" if r["Type"] == "Objective" else "gray"
+        dot_lines.append(
+            f'  "{r["Parent Group"]}" -> "{r["Dependent Group"]}" '
             f'[label="{r["Type"]} ({r["Multiple"]})", style="{style}", color="{color}"];'
         )
+
     dot_lines.append("}")
     dot = "\n".join(dot_lines)
+
     st.graphviz_chart(dot, use_container_width=True)
     # # Sum prices of selected products
     # total_price = 0.0
