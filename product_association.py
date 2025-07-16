@@ -391,6 +391,79 @@ def apply_config(config):
 
     st.rerun()
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Helpers for “Delete Group” buttons — must live at top of file, before Configuration
+# ──────────────────────────────────────────────────────────────────────────────
+def delete_parent_group(idx):
+    """Remove parent #idx (and all its mapping keys), shift everything above it down."""
+    sc = st.session_state
+    pc = sc.get("parent_count", 0)
+    dc = sc.get("dependent_count", 0)
+    # 1) delete the keys for this exact index
+    for key in (
+        f"parent_name_{idx}",
+        f"parent_search_{idx}",
+        f"parent_excl_{idx}",
+        f"mapping_name_{idx}"
+    ):
+        sc.pop(key, None)
+    # delete all map/obj/mult for this parent
+    for j in range(dc):
+        for prefix in ("map", "obj", "mult"):
+            sc.pop(f"{prefix}_{idx}_{j}", None)
+    # 2) shift every parent i>idx down to i-1
+    for i in range(idx+1, pc):
+        # shift name/search/excl/mapping_name
+        for base in ("parent_name", "parent_search", "parent_excl", "mapping_name"):
+            old = f"{base}_{i}"
+            new = f"{base}_{i-1}"
+            if old in sc:
+                sc[new] = sc.pop(old)
+        # shift map/obj/mult for each dependent
+        for j in range(dc):
+            for prefix in ("map", "obj", "mult"):
+                old = f"{prefix}_{i}_{j}"
+                new = f"{prefix}_{i-1}_{j}"
+                if old in sc:
+                    sc[new] = sc.pop(old)
+    # 3) decrement the count
+    sc["parent_count"] = pc - 1
+
+def delete_dependent_group(idx):
+    """Remove dependent #idx (and all its mapping keys), shift everything above it down."""
+    sc = st.session_state
+    pc = sc.get("parent_count", 0)
+    dc = sc.get("dependent_count", 0)
+    # 1) delete the keys for this exact index
+    for key in (
+        f"dep_name_{idx}",
+        f"dep_search_{idx}",
+        f"dep_excl_{idx}"
+    ):
+        sc.pop(key, None)
+    # delete all map/obj/mult for this dependent
+    for i in range(pc):
+        for prefix in ("map", "obj", "mult"):
+            sc.pop(f"{prefix}_{i}_{idx}", None)
+    # 2) shift every dependent j>idx down to j-1
+    for j in range(idx+1, dc):
+        # shift name/search/excl
+        for base in ("dep_name", "dep_search", "dep_excl"):
+            old = f"{base}_{j}"
+            new = f"{base}_{j-1}"
+            if old in sc:
+                sc[new] = sc.pop(old)
+        # shift map/obj/mult for each parent
+        for i in range(pc):
+            for prefix in ("map", "obj", "mult"):
+                old = f"{prefix}_{i}_{j}"
+                new = f"{prefix}_{i}_{j-1}"
+                if old in sc:
+                    sc[new] = sc.pop(old)
+    # 3) decrement the count
+    sc["dependent_count"] = dc - 1
+
 # ---------------------------
 # Main App
 # ---------------------------
@@ -471,28 +544,64 @@ if page == "Configuration":
     with st.expander("Data Preview (first 50 rows)", expanded=False):
         st.dataframe(df.head(50))
 
-    c1,c2 = st.columns(2)
-    # new — no upper limit
-    parent_count = c1.number_input(
-        "Number of Parent Groups",
-        min_value=1,
-        value=st.session_state.get("parent_count", 1),
-        step=1,
-        key="parent_count"
-    )
+    # c1,c2 = st.columns(2)
+    # # new — no upper limit
+    # parent_count = c1.number_input(
+    #     "Number of Parent Groups",
+    #     min_value=1,
+    #     value=st.session_state.get("parent_count", 1),
+    #     step=1,
+    #     key="parent_count"
+    # )
 
-    dep_count = c2.number_input(
-        "Number of Dependent Groups",
-        min_value=1,
-        value=st.session_state.get("dependent_count", 1),
-        step=1,
-        key="dependent_count"
-    )
+    # dep_count = c2.number_input(
+    #     "Number of Dependent Groups",
+    #     min_value=1,
+    #     value=st.session_state.get("dependent_count", 1),
+    #     step=1,
+    #     key="dependent_count"
+    # )
+
+    c1, c2 = st.columns(2)
+    # — Add a new parent group —
+    if c1.button("➕ Add Product Group"):
+        st.session_state.parent_count = st.session_state.get("parent_count", 1) + 1
+        idx = st.session_state.parent_count - 1
+        # Initialize the new group's session_state so that its widgets show up blank
+        st.session_state[f"parent_name_{idx}"]   = f"P_{idx+1}"
+        st.session_state[f"parent_search_{idx}"] = ""
+        st.session_state[f"parent_excl_{idx}"]   = ""
+        st.rerun()
+    # — Add a new dependent group —
+    if c2.button("➕ Add Dependent Group"):
+        st.session_state.dependent_count = st.session_state.get("dependent_count", 1) + 1
+        idx = st.session_state.dependent_count - 1
+        st.session_state[f"dep_name_{idx}"]   = f"D_{idx+1}"
+        st.session_state[f"dep_search_{idx}"] = ""
+        st.session_state[f"dep_excl_{idx}"]   = ""
+        st.rerun()
+
+    # Now pull counts out of state
+    parent_count    = st.session_state.get("parent_count", 1)
+    dependent_count = st.session_state.get("dependent_count", 1)
+
+
+
     # Parent Groups
     st.subheader("Define Parent Groups")
     parent_list = []
+    # for i in range(parent_count):
+    #     with st.expander(f"Parent Group #{i+1}", expanded=(i==0)):
+
     for i in range(parent_count):
-        with st.expander(f"Parent Group #{i+1}", expanded=(i==0)):
+        # read the live name from session_state, fallback to P_i+1
+        exp_label = st.session_state.get(f"parent_name_{i}", f"P_{i+1}")
+        with st.expander(exp_label, expanded=(i==0)):
+            c0 = st.columns([1,5])[0]
+            # delete button at top right of the expander
+            if c0.button("🗑️ Delete Group", key=f"delete_parent_{i}"):
+                delete_parent_group(i)
+                st.rerun()
             c1,c2,c3 = st.columns(3)
             name       = c1.text_input(
                 "Name",
@@ -518,8 +627,16 @@ if page == "Configuration":
     # Dependent Groups
     st.subheader("Define Dependent Groups")
     dependent_list = []
-    for j in range(dep_count):
-        with st.expander(f"Dependent Group #{j+1}", expanded=(j==0)):
+    # for j in range(dep_count):
+    #     with st.expander(f"Dependent Group #{j+1}", expanded=(j==0)):
+
+    for j in range(dependent_count):
+        exp_label = st.session_state.get(f"dep_name_{j}", f"D_{j+1}")
+        with st.expander(exp_label, expanded=(j==0)):
+            c0 = st.columns([1,5])[0]
+            if c0.button("🗑️ Delete Group", key=f"delete_dependent_{j}"):
+                delete_dependent_group(j)
+                st.rerun()
             c1,c2,c3 = st.columns(3)
             name       = c1.text_input(
                 "Name",
@@ -600,7 +717,7 @@ if page == "Configuration":
     # ─────────────────────────────────────────────
     cur_config = {
         "num_parent_groups":    parent_count,
-        "num_dependent_groups": dep_count,
+        "num_dependent_groups": dependent_count,
         "parent_groups": [
             {"name": p["name"], 
              "search_terms": p["search"], 
@@ -629,9 +746,6 @@ if page == "Configuration":
         }
     }
 
-    # # If we’ve generated a report before, but the form now differs, warn
-    # if "last_config" in st.session_state and cur_config != st.session_state["last_config"]:
-    #     st.sidebar.warning("⚠ You have unsaved changes. Click **Generate Report** to refresh the report with your edits.")
 
     # ─────────────────────────────────────────────────────────
     # Sidebar “Generate Report” button + status messaging
@@ -640,7 +754,6 @@ if page == "Configuration":
 
     if gen_clicked:
         # # Generate Report
-        # if st.button("Generate Report"):
             # Process parent groups
             parent_dfs, parent_sums, parent_names = {}, {}, []
             for p in parent_list:
