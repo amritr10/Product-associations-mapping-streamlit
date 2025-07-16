@@ -544,42 +544,8 @@ if page == "Configuration":
     with st.expander("Data Preview (first 50 rows)", expanded=False):
         st.dataframe(df.head(50))
 
-    # c1,c2 = st.columns(2)
-    # # new — no upper limit
-    # parent_count = c1.number_input(
-    #     "Number of Parent Groups",
-    #     min_value=1,
-    #     value=st.session_state.get("parent_count", 1),
-    #     step=1,
-    #     key="parent_count"
-    # )
 
-    # dep_count = c2.number_input(
-    #     "Number of Dependent Groups",
-    #     min_value=1,
-    #     value=st.session_state.get("dependent_count", 1),
-    #     step=1,
-    #     key="dependent_count"
-    # )
 
-    c1, c2 = st.columns(2)
-    # — Add a new parent group —
-    if c1.button("➕ Add Product Group"):
-        st.session_state.parent_count = st.session_state.get("parent_count", 1) + 1
-        idx = st.session_state.parent_count - 1
-        # Initialize the new group's session_state so that its widgets show up blank
-        st.session_state[f"parent_name_{idx}"]   = f"P_{idx+1}"
-        st.session_state[f"parent_search_{idx}"] = ""
-        st.session_state[f"parent_excl_{idx}"]   = ""
-        st.rerun()
-    # — Add a new dependent group —
-    if c2.button("➕ Add Dependent Group"):
-        st.session_state.dependent_count = st.session_state.get("dependent_count", 1) + 1
-        idx = st.session_state.dependent_count - 1
-        st.session_state[f"dep_name_{idx}"]   = f"D_{idx+1}"
-        st.session_state[f"dep_search_{idx}"] = ""
-        st.session_state[f"dep_excl_{idx}"]   = ""
-        st.rerun()
 
     # Now pull counts out of state
     parent_count    = st.session_state.get("parent_count", 1)
@@ -624,6 +590,16 @@ if page == "Configuration":
                 st.warning("❗ No search terms: this group will return zero rows.")
             parent_list.append({"name":name.strip(), "search":search, "excl":excl})
 
+
+    # moved Add-Parent button here
+    if st.button("➕ Add Product Group"):
+        st.session_state.parent_count = parent_count + 1
+        idx = parent_count
+        st.session_state[f"parent_name_{idx}"]   = f"P_{idx+1}"
+        st.session_state[f"parent_search_{idx}"] = ""
+        st.session_state[f"parent_excl_{idx}"]   = ""
+        st.rerun()
+
     # Dependent Groups
     st.subheader("Define Dependent Groups")
     dependent_list = []
@@ -658,6 +634,16 @@ if page == "Configuration":
             if not search:
                 st.warning("❗ No search terms: this group will return zero rows.")
             dependent_list.append({"name":name.strip(), "search":search, "excl":excl})
+
+
+    # moved Add-Dependent button here
+    if st.button("➕ Add Dependent Group"):
+        st.session_state.dependent_count = dependent_count + 1
+        idx = dependent_count
+        st.session_state[f"dep_name_{idx}"]   = f"D_{idx+1}"
+        st.session_state[f"dep_search_{idx}"] = ""
+        st.session_state[f"dep_excl_{idx}"]   = ""
+        st.rerun()
 
     # Mappings
     st.subheader("Define Mappings")
