@@ -8,7 +8,6 @@ from xlsxwriter.utility import xl_col_to_name
 import plotly.express as px
 
 
-
 # ---------------------------
 # Helper Functions
 # ---------------------------
@@ -531,6 +530,11 @@ if page == "Configuration":
         st.error("No data loaded from your file.")
         st.stop()
 
+    has_ia_fa = {"IA","FA"}.issubset(df.columns)
+    st.session_state["has_ia_fa"] = has_ia_fa
+    if not has_ia_fa:
+        st.warning("⚠️ No IA/FA columns detected – shortage balances and full-Excel export will be disabled.")
+
     # ─────────────────────────────────────────────
     # 0) Prefill the form from last‐generated config
     # ─────────────────────────────────────────────
@@ -817,15 +821,19 @@ if page == "Configuration":
                 dependent_sheet_names[dn] = sn
                 existing.add(sn)
 
-            # Build Excel
-            excel_bytes = save_to_excel_bytes(
-                mappings_data, mapping_to_parent, dependent_to_mappings,
-                parent_dfs, dependent_dfs,
-                parent_names, dependent_names,
-                parent_to_mappings,
-                parent_sheet_names, dependent_sheet_names,
-                parent_sums, dependent_sums
-            )
+            # ———————— only build Excel if IA/FA are present ————————
+            if st.session_state.get("has_ia_fa", False):
+                excel_bytes = save_to_excel_bytes(
+                    mappings_data, mapping_to_parent, dependent_to_mappings,
+                    parent_dfs, dependent_dfs,
+                    parent_names, dependent_names,
+                    parent_to_mappings,
+                    parent_sheet_names, dependent_sheet_names,
+                    parent_sums, dependent_sums
+                )
+            else:
+                excel_bytes = None
+
 
             # Persist to session_state
             st.session_state.update({
@@ -855,7 +863,10 @@ if page == "Configuration":
 
     # Always show *one* message in the sidebar:
     if gen_clicked:
-        st.sidebar.success("✅ Report generated! Switch to the Report page to explore.")
+        if st.session_state["has_ia_fa"]:
+            st.sidebar.success("✅ Report + Excel generated! Switch to Report page.")
+        else:
+            st.sidebar.success("✅ Report generated! (Excel export disabled.)")
     elif "last_config" in st.session_state and cur_config != st.session_state["last_config"]:
         st.sidebar.warning("⚠ You have unsaved changes. Click **Generate Report** to refresh the report with your edits.")
 
@@ -936,13 +947,16 @@ elif page == "Report":
     overlapping_parent_groups = st.session_state.overlapping_parent_groups
     parent_only_groups = st.session_state.parent_only_groups
 
-    # Download Excel
-    st.download_button(
-        "Download Full Excel Report",
-        data=excel_bytes,
-        file_name=f"Product_Dependent_Report_{datetime.now():%Y-%m-%d}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    # ———————— conditional Excel download ————————
+    if st.session_state.get("has_ia_fa", False) and excel_bytes:
+        st.download_button(
+            "Download Full Excel Report",
+            data=excel_bytes,
+            file_name=f"Product_Dependent_Report_{datetime.now():%Y-%m-%d}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    else:
+        st.info("ℹ️ Skipping full-Excel export (no IA/FA in source data).")
 
     # Flatten for visuals
     flat = flatten_mappings(mappings_data, mapping_to_parent, dependent_sums)
@@ -1075,15 +1089,7 @@ elif page == "Report":
     dot = "\n".join(dot_lines)
 
     st.graphviz_chart(dot, use_container_width=True)
-    # # Sum prices of selected products
-    # total_price = 0.0
-    # for pn, sel in parent_selections.items():
-    #     dfp = parent_dfs[pn]
-    #     total_price += dfp[dfp["Description"].isin(sel)]["Price"].sum()
-    # for dn, sel in dependent_selections.items():
-    #     dfd = dependent_dfs[dn]
-    #     total_price += dfd[dfd["Description"].isin(sel)]["Price"].sum()
-    # st.write(f"**Total Price of Selected Products:** {total_price:.2f}")
+
 
     # Raw Data Explorer
     st.subheader("Raw Data Explorer")
